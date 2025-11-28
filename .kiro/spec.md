@@ -162,3 +162,10 @@ All endpoints return JSON with consistent envelope:
   "error": string | null
 }
 ```
+
+
+## Hook-Added Endpoint
+- **GET** `/api/test`
+  - Description: Test endpoint for unit tests
+  - Type: test-endpoint
+  - Added: 2025-11-28T07:06:13.835200+00:00
