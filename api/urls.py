@@ -48,6 +48,8 @@ urlpatterns = [
     # MEMORY ENDPOINTS (UPDATED - Workspace-Scoped)
     # ============================================
     path('workspaces/<str:workspace_id>/memories', views_memory.workspace_memories_view, name='workspace-memories'),
+    path('workspaces/<str:workspace_id>/memories/import-url', views_memory.import_from_url_view, name='memory-import-url'),
+    path('workspaces/<str:workspace_id>/memories/import-file', views_memory.import_from_file_view, name='memory-import-file'),
     path('memories/<str:memory_id>', views_memory.memory_detail_view, name='memory-detail'),
     path('memories/<str:memory_id>/re-embed', views_memory.re_embed_memory_view, name='memory-re-embed'),
     path('memories/search', views_memory.search_memories_view, name='memory-search'),
