@@ -29,6 +29,10 @@ SUPPORTED_MODELS = {
     'gemini-1.5-flash': 'google',
     'gemini-2.0-flash': 'google',
     
+    # DeepSeek models
+    'deepseek-chat': 'deepseek',
+    'deepseek-coder': 'deepseek',
+    
     # Groq models (fast inference)
     'llama-3-70b': 'groq',
     'llama-3-8b': 'groq',
@@ -52,20 +56,20 @@ def normalize_model_name(model_name: str, provider: str) -> str:
     Returns:
         Normalized model name for API (e.g., "gemini-2.0-flash")
     """
-    # Normalize input for comparison
+    # Normalize input for comparison (remove all separators)
     normalized_input = model_name.replace('.', '').replace('-', '').replace('_', '').lower()
     
     # Find matching model in SUPPORTED_MODELS
     for model_key, model_provider in SUPPORTED_MODELS.items():
         if model_provider == provider:
-            # Normalize the model key for comparison
+            # Normalize the model key for comparison (remove all separators)
             normalized_key = model_key.replace('.', '').replace('-', '').replace('_', '').lower()
             
-            # Check if they match
-            if normalized_input == normalized_key or normalized_input in normalized_key or normalized_key in normalized_input:
+            # Check if they match exactly
+            if normalized_input == normalized_key:
                 return model_key
     
-    # If no match found, return original
+    # If no exact match found, return original
     return model_name
 
 
@@ -74,28 +78,28 @@ def get_provider(model_name: str) -> str:
     Get the provider for a given model name
     
     Args:
-        model_name: Name of the LLM model (e.g., "gemini-2.0-flash" or "model-gemini-20-flash")
+        model_name: Name of the LLM model (e.g., "gemini-2.0-flash" or "model-gemini-2.0-flash")
         
     Returns:
-        Provider name (openai, anthropic, groq, echo, local)
+        Provider name (openai, anthropic, google, groq, echo, local)
     """
     # Remove "model-" prefix if present
     clean_name = model_name.replace('model-', '').lower()
     
-    # Check exact match
+    # Check exact match first
     if clean_name in SUPPORTED_MODELS:
         return SUPPORTED_MODELS[clean_name]
     
     # Normalize the clean_name for comparison (remove dots, hyphens, underscores)
     normalized_name = clean_name.replace('.', '').replace('-', '').replace('_', '')
     
-    # Check against all supported models
+    # Check against all supported models with normalization
     for model_key, provider in SUPPORTED_MODELS.items():
         # Normalize the model key
         normalized_key = model_key.replace('.', '').replace('-', '').replace('_', '').lower()
         
-        # Check if they match
-        if normalized_name == normalized_key or normalized_name.startswith(normalized_key):
+        # Check if they match exactly after normalization
+        if normalized_name == normalized_key:
             return provider
     
     # Default to echo for demo
@@ -125,10 +129,10 @@ def call_llm_with_conversation(conversation: Conversation, user_message: str, ap
     model_id = conversation.model_id
     provider = get_provider(model_id)
     
-    # Extract actual model name and convert back to proper format
+    # Extract actual model name (remove "model-" prefix if present)
     model_name = model_id.replace('model-', '')
     
-    # Map common model name variations back to API format
+    # Normalize model name to match API format (e.g., "gemini-20-flash" -> "gemini-2.0-flash")
     model_name = normalize_model_name(model_name, provider)
     
     # Debug logging
@@ -141,6 +145,8 @@ def call_llm_with_conversation(conversation: Conversation, user_message: str, ap
         return call_anthropic(model_name, "", api_key=api_key, context=context)
     elif provider == 'google':
         return call_google(model_name, "", api_key=api_key, context=context)
+    elif provider == 'deepseek':
+        return call_deepseek(model_name, "", api_key=api_key, context=context)
     elif provider == 'groq':
         return call_groq(model_name, user_message)
     elif provider == 'local':
@@ -173,6 +179,8 @@ def call_llm(model_name: str, prompt: str, context: str = "") -> Dict[str, Any]:
         return call_anthropic(model_name, full_prompt)
     elif provider == 'google':
         return call_google(model_name, full_prompt)
+    elif provider == 'deepseek':
+        return call_deepseek(model_name, full_prompt)
     elif provider == 'groq':
         return call_groq(model_name, full_prompt)
     elif provider == 'local':
@@ -189,8 +197,8 @@ def build_context(conversation: Conversation, user_message: str) -> Dict[str, An
     """
     system_prompt = "You are a helpful AI assistant in the Chimera Protocol system."
     
-    # Get injected memories
-    injected_memories = conversation.injected_memory_links.select_related('memory').all()
+    # Get only active injected memories
+    injected_memories = conversation.injected_memory_links.select_related('memory').filter(is_active=True)
     memories_text = ""
     
     if injected_memories.exists():
@@ -459,6 +467,86 @@ def call_google(model: str, prompt: str, api_key: str = None, context: Dict[str,
             'reply': f"[Google {model}] Error: {str(e)}",
             'model_used': model,
             'provider': 'google',
+            'tokens': 0,
+            'status': 'error',
+            'error': str(e)
+        }
+
+
+def call_deepseek(model: str, prompt: str, api_key: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Call DeepSeek API (OpenAI-compatible)
+    Requirements: Use openai library with custom base URL
+    """
+    try:
+        import openai
+        
+        if not api_key:
+            api_key = os.getenv('DEEPSEEK_API_KEY')
+        
+        if not api_key:
+            return {
+                'reply': f"[DeepSeek {model}] No API key provided",
+                'model_used': model,
+                'provider': 'deepseek',
+                'tokens': 0,
+                'status': 'error',
+                'error': 'No API key'
+            }
+        
+        # Build messages
+        messages = []
+        
+        if context:
+            system_content = context['system_prompt']
+            if context['memories_text']:
+                system_content += context['memories_text']
+            messages.append({'role': 'system', 'content': system_content})
+            
+            for msg in context['history']:
+                messages.append({'role': msg.role, 'content': msg.content})
+            
+            messages.append({'role': 'user', 'content': context['user_message']})
+        else:
+            messages.append({'role': 'user', 'content': prompt})
+        
+        # Call DeepSeek API with custom base URL
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com"
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        assistant_message = response.choices[0].message.content
+        tokens = response.usage.total_tokens if response.usage else 0
+        
+        return {
+            'reply': assistant_message,
+            'model_used': response.model,
+            'provider': 'deepseek',
+            'tokens': tokens,
+            'status': 'success'
+        }
+    
+    except ImportError:
+        return {
+            'reply': f"[DeepSeek {model}] openai library not installed",
+            'model_used': model,
+            'provider': 'deepseek',
+            'tokens': 0,
+            'status': 'error',
+            'error': 'Library not installed'
+        }
+    except Exception as e:
+        return {
+            'reply': f"[DeepSeek {model}] Error: {str(e)}",
+            'model_used': model,
+            'provider': 'deepseek',
             'tokens': 0,
             'status': 'error',
             'error': str(e)

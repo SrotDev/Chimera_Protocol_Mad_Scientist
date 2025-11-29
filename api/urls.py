@@ -15,6 +15,7 @@ urlpatterns = [
     path('workspaces/<str:workspace_id>/dashboard', views_workspace.workspace_dashboard_view, name='workspace-dashboard'),
     path('workspaces/<str:workspace_id>/activity', views_workspace.workspace_activity_view, name='workspace-activity'),
     path('workspaces/<str:workspace_id>/neural-load', views_workspace.workspace_neural_load_view, name='workspace-neural-load'),
+    path('workspaces/<str:workspace_id>/record-load', views_workspace.record_load_snapshot_view, name='workspace-record-load'),
     
     # ============================================
     # TEAM MANAGEMENT ENDPOINTS (NEW)
@@ -25,6 +26,11 @@ urlpatterns = [
     path('workspaces/<str:workspace_id>/team/<str:user_id>/status', views_team.update_member_status_view, name='team-update-status'),
     path('workspaces/<str:workspace_id>/team/<str:user_id>', views_team.remove_team_member_view, name='team-remove'),
     
+    # Invitation endpoints
+    path('invitations', views_team.list_invitations_view, name='invitations-list'),
+    path('invitations/<str:invitation_id>/accept', views_team.accept_invitation_view, name='invitation-accept'),
+    path('invitations/<str:invitation_id>/decline', views_team.decline_invitation_view, name='invitation-decline'),
+    
     # ============================================
     # CONVERSATION ENDPOINTS (UPDATED - Workspace-Scoped)
     # ============================================
@@ -34,6 +40,9 @@ urlpatterns = [
     path('conversations/<str:conversation_id>/messages/<str:message_id>', views_conversation.message_detail_view, name='message-detail'),
     path('conversations/<str:conversation_id>/inject-memory', views_conversation.inject_memory_view, name='inject-memory'),
     path('conversations/<str:conversation_id>/inject-memory/<str:memory_id>', views_conversation.remove_injected_memory_view, name='remove-injected-memory'),
+    path('conversations/<str:conversation_id>/inject-memory/<str:memory_id>/toggle', views_conversation.toggle_injected_memory_view, name='toggle-injected-memory'),
+    path('conversations/<str:conversation_id>/close', views_conversation.close_conversation_view, name='close-conversation'),
+    path('conversations/<str:conversation_id>/reopen', views_conversation.reopen_conversation_view, name='reopen-conversation'),
     
     # ============================================
     # MEMORY ENDPOINTS (UPDATED - Workspace-Scoped)

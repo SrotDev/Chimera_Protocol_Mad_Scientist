@@ -98,6 +98,41 @@ class TeamMember(models.Model):
         super().save(*args, **kwargs)
 
 
+class WorkspaceInvitation(models.Model):
+    """
+    Invitation to join a workspace
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('declined', 'Declined'),
+    ]
+    
+    id = models.CharField(max_length=50, primary_key=True, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='invitations')
+    inviter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_invitations')
+    invitee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_invitations')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ['workspace', 'invitee']
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['invitee', 'status']),
+            models.Index(fields=['workspace', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"Invitation to {self.invitee.username} for {self.workspace.name} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            self.id = f"inv-{uuid.uuid4().hex[:12]}"
+        super().save(*args, **kwargs)
+
+
 class Integration(models.Model):
     """
     API integration for cognitive models (OpenAI, Anthropic, Google)
@@ -106,6 +141,7 @@ class Integration(models.Model):
         ('openai', 'OpenAI'),
         ('anthropic', 'Anthropic'),
         ('google', 'Google'),
+        ('deepseek', 'DeepSeek'),
     ]
     
     STATUS_CHOICES = [
@@ -117,7 +153,7 @@ class Integration(models.Model):
     id = models.CharField(max_length=50, primary_key=True, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='integrations')
     provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
-    api_key = models.CharField(max_length=255)  # Should be encrypted in production
+    api_key = models.TextField()  # Encrypted API key (can be longer than 255 chars)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='disconnected')
     last_tested = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)
@@ -261,6 +297,7 @@ class ConversationMemory(models.Model):
     """
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='injected_memory_links')
     memory = models.ForeignKey(Memory, on_delete=models.CASCADE, related_name='injected_in_conversations')
+    is_active = models.BooleanField(default=True, help_text="Whether this memory is actively included in context")
     injected_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -270,7 +307,31 @@ class ConversationMemory(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.memory.title} injected in {self.conversation.title}"
+        return f"{self.memory.title} injected in {self.conversation.title} (active={self.is_active})"
+
+
+class SystemLoadSnapshot(models.Model):
+    """
+    Stores historical system load data for the neural load monitor
+    """
+    id = models.CharField(max_length=50, primary_key=True, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='load_snapshots')
+    value = models.IntegerField(help_text="System load percentage (0-100)")
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['workspace', '-timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.workspace.name}: {self.value}% at {self.timestamp}"
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            self.id = f"load-{uuid.uuid4().hex[:12]}"
+        super().save(*args, **kwargs)
 
 
 class Activity(models.Model):

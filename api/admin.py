@@ -3,7 +3,10 @@ Django admin configuration
 """
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Memory, Conversation, ChatMessage, Workspace, TeamMember, Integration
+from .models import (
+    User, Memory, Conversation, ChatMessage, Workspace, TeamMember, 
+    Integration, WorkspaceInvitation, ConversationMemory, Activity, SystemLoadSnapshot
+)
 
 
 @admin.register(User)
@@ -79,3 +82,39 @@ class IntegrationAdmin(admin.ModelAdmin):
     list_filter = ['provider', 'status', 'created_at']
     search_fields = ['user__username', 'provider']
     readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(WorkspaceInvitation)
+class WorkspaceInvitationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'workspace', 'inviter', 'invitee', 'status', 'created_at', 'responded_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['workspace__name', 'inviter__username', 'invitee__username', 'invitee__email']
+    readonly_fields = ['id', 'created_at']
+
+
+@admin.register(ConversationMemory)
+class ConversationMemoryAdmin(admin.ModelAdmin):
+    list_display = ['conversation', 'memory', 'is_active', 'injected_at']
+    list_filter = ['is_active', 'injected_at']
+    search_fields = ['conversation__title', 'memory__title']
+    readonly_fields = ['injected_at']
+
+
+@admin.register(Activity)
+class ActivityAdmin(admin.ModelAdmin):
+    list_display = ['id', 'workspace', 'type', 'description_preview', 'timestamp']
+    list_filter = ['type', 'timestamp', 'workspace']
+    search_fields = ['description', 'workspace__name']
+    readonly_fields = ['id', 'timestamp']
+    
+    def description_preview(self, obj):
+        return obj.description[:80] + '...' if len(obj.description) > 80 else obj.description
+    description_preview.short_description = 'Description'
+
+
+@admin.register(SystemLoadSnapshot)
+class SystemLoadSnapshotAdmin(admin.ModelAdmin):
+    list_display = ['id', 'workspace', 'value', 'timestamp']
+    list_filter = ['timestamp', 'workspace']
+    search_fields = ['workspace__name']
+    readonly_fields = ['id', 'timestamp']

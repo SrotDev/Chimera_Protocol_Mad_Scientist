@@ -84,6 +84,104 @@ def _calculate_system_load(workspace):
     return system_load
 
 
+def record_load_snapshot(workspace):
+    """
+    Record current system load as a snapshot for historical tracking.
+    Called when significant activity occurs (message sent, conversation created, etc.)
+    
+    Args:
+        workspace: Workspace model instance
+    """
+    from .models import SystemLoadSnapshot
+    
+    # Calculate current load
+    system_load = _calculate_system_load(workspace)
+    
+    # Create snapshot
+    SystemLoadSnapshot.objects.create(
+        workspace=workspace,
+        value=system_load
+    )
+    
+    # Clean up old snapshots (keep last 24 hours worth, ~288 at 5-min intervals)
+    from django.utils import timezone
+    cutoff = timezone.now() - timedelta(hours=24)
+    workspace.load_snapshots.filter(timestamp__lt=cutoff).delete()
+
+
+def get_neural_load_history(workspace, points=24):
+    """
+    Get historical load data for the neural load monitor.
+    Returns actual stored snapshots, filling gaps with interpolation.
+    
+    Args:
+        workspace: Workspace model instance
+        points: Number of data points to return (default 24)
+        
+    Returns:
+        list: Array of timestamp-value pairs
+    """
+    from .models import SystemLoadSnapshot
+    from django.utils import timezone
+    
+    now = timezone.now()
+    interval_minutes = 5
+    
+    # Get snapshots from last 2 hours (24 points * 5 min = 120 min)
+    cutoff = now - timedelta(minutes=points * interval_minutes)
+    snapshots = list(workspace.load_snapshots.filter(
+        timestamp__gte=cutoff
+    ).order_by('timestamp'))
+    
+    # If no snapshots, return current load for all points
+    if not snapshots:
+        current_load = _calculate_system_load(workspace)
+        return [
+            {
+                'timestamp': now - timedelta(minutes=(points - 1 - i) * interval_minutes),
+                'value': current_load
+            }
+            for i in range(points)
+        ]
+    
+    # Build time series with actual data
+    result = []
+    snapshot_idx = 0
+    
+    for i in range(points):
+        target_time = now - timedelta(minutes=(points - 1 - i) * interval_minutes)
+        
+        # Find closest snapshot to this time point
+        best_snapshot = None
+        best_diff = timedelta(minutes=interval_minutes)  # Max acceptable diff
+        
+        for snap in snapshots:
+            diff = abs(snap.timestamp - target_time)
+            if diff < best_diff:
+                best_diff = diff
+                best_snapshot = snap
+        
+        if best_snapshot:
+            result.append({
+                'timestamp': target_time,
+                'value': best_snapshot.value
+            })
+        else:
+            # No snapshot near this time, use interpolation or last known value
+            if result:
+                result.append({
+                    'timestamp': target_time,
+                    'value': result[-1]['value']
+                })
+            else:
+                result.append({
+                    'timestamp': target_time,
+                    'value': _calculate_system_load(workspace)
+                })
+    
+    return result
+
+
 def _calculate_last_activity(workspace):
     """
     Calculate the most recent timestamp across all workspace entities.

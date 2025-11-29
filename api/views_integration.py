@@ -56,6 +56,10 @@ def integrations_view(request):
             )
         
         # Test the API connection before saving
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔍 Creating integration for provider: {provider}")
+        
         test_result = _test_provider_connection(provider, api_key)
         
         # Encrypt API key before storage
@@ -194,6 +198,10 @@ def _test_provider_connection(provider, api_key):
     Returns dict with 'success' boolean and optional 'error' message
     """
     import requests
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"🔍 Testing connection for provider: {provider}")
     
     try:
         if provider == 'openai':
@@ -206,11 +214,15 @@ def _test_provider_connection(provider, api_key):
                 timeout=10
             )
             
+            logger.info(f"✅ OpenAI API response: {response.status_code}")
+            
             if response.status_code == 200:
                 return {'success': True}
             elif response.status_code == 401:
                 return {'success': False, 'error': 'Invalid API key'}
             else:
+                error_detail = response.text[:200] if response.text else 'No details'
+                logger.error(f"❌ OpenAI API error: {response.status_code} - {error_detail}")
                 return {'success': False, 'error': f'API returned status {response.status_code}'}
         
         elif provider == 'anthropic':
@@ -230,11 +242,15 @@ def _test_provider_connection(provider, api_key):
                 timeout=10
             )
             
+            logger.info(f"✅ Anthropic API response: {response.status_code}")
+            
             if response.status_code == 200:
                 return {'success': True}
             elif response.status_code == 401:
                 return {'success': False, 'error': 'Invalid API key'}
             else:
+                error_detail = response.text[:200] if response.text else 'No details'
+                logger.error(f"❌ Anthropic API error: {response.status_code} - {error_detail}")
                 return {'success': False, 'error': f'API returned status {response.status_code}'}
         
         elif provider == 'google':
@@ -244,24 +260,63 @@ def _test_provider_connection(provider, api_key):
                 timeout=10
             )
             
+            logger.info(f"✅ Google API response: {response.status_code}")
+            
             if response.status_code == 200:
                 return {'success': True}
             elif response.status_code == 400:
                 # Google returns 400 for invalid API keys
+                error_detail = response.text[:200] if response.text else 'No details'
+                logger.error(f"❌ Google API error: {response.status_code} - {error_detail}")
                 return {'success': False, 'error': 'Invalid API key'}
             else:
+                error_detail = response.text[:200] if response.text else 'No details'
+                logger.error(f"❌ Google API error: {response.status_code} - {error_detail}")
+                return {'success': False, 'error': f'API returned status {response.status_code}'}
+        
+        elif provider == 'deepseek':
+            # Test DeepSeek API (OpenAI-compatible)
+            response = requests.post(
+                'https://api.deepseek.com/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json'
+                },
+                json={
+                    'model': 'deepseek-chat',
+                    'messages': [{'role': 'user', 'content': 'test'}],
+                    'max_tokens': 1
+                },
+                timeout=10
+            )
+            
+            logger.info(f"✅ DeepSeek API response: {response.status_code}")
+            
+            if response.status_code == 200:
+                return {'success': True}
+            elif response.status_code == 401:
+                return {'success': False, 'error': 'Invalid API key'}
+            else:
+                error_detail = response.text[:200] if response.text else 'No details'
+                logger.error(f"❌ DeepSeek API error: {response.status_code} - {error_detail}")
                 return {'success': False, 'error': f'API returned status {response.status_code}'}
         
         else:
             return {'success': False, 'error': f'Unknown provider: {provider}'}
     
     except requests.exceptions.Timeout:
+        logger.error(f"❌ Connection timeout for {provider}")
         return {'success': False, 'error': 'Connection timeout - API did not respond in time'}
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"❌ Connection error for {provider}: {str(e)}")
         return {'success': False, 'error': 'Connection error - unable to reach API'}
     except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Request failed for {provider}: {str(e)}")
         return {'success': False, 'error': f'Request failed: {str(e)}'}
     except Exception as e:
+        logger.error(f"❌ Unexpected error for {provider}: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {'success': False, 'error': f'Unexpected error: {str(e)}'}
 
 
@@ -300,8 +355,8 @@ def available_models_view(request):
             # Generate display name (capitalize and replace hyphens with spaces)
             display_name = model_name.replace('-', ' ').title()
             
-            # Create model ID (e.g., "model-gpt4o")
-            model_id = f"model-{model_name.replace('.', '').replace('_', '')}"
+            # Create model ID - keep original format with dots (e.g., "model-gemini-2.0-flash")
+            model_id = f"model-{model_name}"
             
             available_models.append({
                 'id': model_id,
@@ -328,6 +383,7 @@ def get_brain_region(provider):
         'openai': 'Left Cortex',
         'anthropic': 'Right Cortex',
         'google': 'Occipital',
+        'deepseek': 'Frontal Lobe',
         'groq': 'Temporal',
         'echo': 'Cerebellum'
     }
@@ -340,6 +396,7 @@ def get_model_position(provider):
         'openai': {'x': -2, 'y': 1, 'z': 1},
         'anthropic': {'x': 2, 'y': 1, 'z': 1},
         'google': {'x': 0, 'y': -1, 'z': 2},
+        'deepseek': {'x': 0, 'y': 2, 'z': 0},
         'groq': {'x': -1, 'y': 0, 'z': -1},
         'echo': {'x': 0, 'y': 0, 'z': 0}
     }

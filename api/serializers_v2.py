@@ -210,8 +210,14 @@ class ConversationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'workspaceId', 'createdAt', 'updatedAt']
     
     def get_injectedMemories(self, obj):
-        # Return list of memory IDs
-        return list(obj.injected_memory_links.values_list('memory_id', flat=True))
+        # Return list of memory objects with id and isActive status
+        return [
+            {
+                'id': link.memory_id,
+                'isActive': link.is_active
+            }
+            for link in obj.injected_memory_links.all()
+        ]
 
 
 class ConversationCreateSerializer(serializers.Serializer):

@@ -256,20 +256,6 @@ def send_message_view(request, conversation_id):
                     
                     # Log activity
                     log_message_sent(workspace, conversation, assistant_message)
-                    
-                    # Auto-extract and save memories
-                    try:
-                        from .memory_extractor import auto_extract_and_save
-                        created_memories = auto_extract_and_save(
-                            user_message=user_content,
-                            llm_reply=ai_response['reply'],
-                            conversation=conversation,
-                            model_used=ai_response.get('model_used', conversation.model_id)
-                        )
-                        if created_memories:
-                            logger.info(f"✅ Auto-extracted {len(created_memories)} memories from conversation")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to auto-extract memories: {str(e)}")
                 else:
                     # AI call failed, return error in response
                     error_msg = ai_response.get('error', 'AI call failed')
@@ -285,6 +271,10 @@ def send_message_view(request, conversation_id):
             
             except Exception as e:
                 # AI call failed, but user message was saved
+                import traceback
+                logger.error(f"❌ Exception in send_message_view: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                
                 response_serializer = MessageSerializer(user_message)
                 return Response(
                     api_response(
@@ -431,10 +421,10 @@ def inject_memory_view(request, conversation_id):
         )
 
 
-@api_view(['DELETE'])
+@api_view(['PUT'])
 @permission_classes([IsAuthenticated])
-def remove_injected_memory_view(request, conversation_id, memory_id):
-    """Remove injected memory from conversation"""
+def toggle_injected_memory_view(request, conversation_id, memory_id):
+    """Toggle active state of injected memory (pause/resume)"""
     try:
         conversation = Conversation.objects.get(id=conversation_id)
         workspace = conversation.workspace
@@ -454,6 +444,55 @@ def remove_injected_memory_view(request, conversation_id, memory_id):
                 conversation=conversation,
                 memory_id=memory_id
             )
+            # Toggle the active state
+            injection.is_active = not injection.is_active
+            injection.save()
+            
+            return Response(api_response(
+                ok=True,
+                data={
+                    'memoryId': memory_id,
+                    'isActive': injection.is_active,
+                    'message': f"Memory {'activated' if injection.is_active else 'paused'}"
+                }
+            ))
+        except ConversationMemory.DoesNotExist:
+            return Response(
+                api_response(ok=False, error='Memory injection not found'),
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    except Conversation.DoesNotExist:
+        return Response(
+            api_response(ok=False, error='Conversation not found'),
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def remove_injected_memory_view(request, conversation_id, memory_id):
+    """Remove injected memory from conversation"""
+    try:
+        conversation = Conversation.objects.get(id=conversation_id)
+        workspace = conversation.workspace
+        
+        # Check access
+        is_owner = workspace.owner == request.user
+        is_member = workspace.members.filter(user=request.user).exists()
+        
+        if not (is_owner or is_member):
+            return Response(
+                api_response(
+ok=False, error='Access denied'),
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            injection = ConversationMemory.objects.get(
+                conversation=conversation,
+                memory_id=memory_id
+            )
             injection.delete()
             
             return Response(api_response(
@@ -465,6 +504,155 @@ def remove_injected_memory_view(request, conversation_id, memory_id):
                 api_response(ok=False, error='Memory injection not found'),
                 status=status.HTTP_404_NOT_FOUND
             )
+    
+    except Conversation.DoesNotExist:
+        return Response(
+            api_response(ok=False, error='Conversation not found'),
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def close_conversation_view(request, conversation_id):
+    """
+    Close conversation, change status to completed, and auto-summarize to memory
+    """
+    try:
+        conversation = Conversation.objects.select_related('workspace').prefetch_related('messages').get(id=conversation_id)
+        workspace = conversation.workspace
+        
+        # Check access
+        is_owner = workspace.owner == request.user
+        is_member = workspace.members.filter(user=request.user).exists()
+        
+        if not (is_owner or is_member):
+            return Response(
+                api_response(ok=False, error='Access denied'),
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Change status to completed
+        conversation.status = 'completed'
+        conversation.save()
+        
+        # Generate conversation summary and save to memory
+        memory_created = None
+        try:
+            from .memory_service import memory_service
+            import logging
+            
+            logger = logging.getLogger(__name__)
+            
+            # Get all messages
+            messages = conversation.messages.all().order_by('timestamp')
+            
+            if messages.count() > 0:
+                # Build conversation text
+                conversation_text = []
+                for msg in messages:
+                    role = "User" if msg.role == "user" else "Assistant"
+                    conversation_text.append(f"{role}: {msg.content}")
+                
+                full_text = "\n\n".join(conversation_text)
+                
+                # Generate summary title
+                first_user_msg = next((msg.content for msg in messages if msg.role == 'user'), '')
+                title = f"Conversation: {first_user_msg[:50]}..." if len(first_user_msg) > 50 else f"Conversation: {first_user_msg}"
+                
+                # Extract key topics for tags
+                from .memory_extractor import generate_tags
+                tags = generate_tags(full_text)
+                tags.append('conversation-summary')
+                tags.append('auto-generated')
+                
+                # Create memory
+                memory = Memory.objects.create(
+                    workspace=workspace,
+                    title=title,
+                    content=full_text,
+                    tags=tags,
+                    metadata={
+                        'source': 'conversation',
+                        'conversation_id': conversation.id,
+                        'conversation_title': conversation.title,
+                        'model_used': conversation.model_id,
+                        'message_count': messages.count(),
+                        'auto_summarized': True,
+                        'closed_at': conversation.updated_at.isoformat()
+                    }
+                )
+                
+                # Store in search index
+                memory_service.store(memory.content, memory.id)
+                
+                memory_created = {
+                    'id': memory.id,
+                    'title': memory.title,
+                    'snippet': memory.content[:150] + '...' if len(memory.content) > 150 else memory.content
+                }
+                
+                logger.info(f"✅ Created conversation summary memory: {memory.id}")
+        
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ Failed to create conversation summary: {str(e)}")
+            # Don't fail the whole request if memory creation fails
+        
+        # Return updated conversation
+        serializer = ConversationSerializer(conversation)
+        
+        return Response(api_response(
+            ok=True,
+            data={
+                'conversation': serializer.data,
+                'memory': memory_created,
+                'message': 'Conversation closed and summarized successfully'
+            }
+        ))
+    
+    except Conversation.DoesNotExist:
+        return Response(
+            api_response(ok=False, error='Conversation not found'),
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reopen_conversation_view(request, conversation_id):
+    """
+    Reopen a closed conversation, change status back to active
+    """
+    try:
+        conversation = Conversation.objects.select_related('workspace').get(id=conversation_id)
+        workspace = conversation.workspace
+        
+        # Check access
+        is_owner = workspace.owner == request.user
+        is_member = workspace.members.filter(user=request.user).exists()
+        
+        if not (is_owner or is_member):
+            return Response(
+                api_response(ok=False, error='Access denied'),
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Change status back to active
+        conversation.status = 'active'
+        conversation.save()
+        
+        # Return updated conversation
+        serializer = ConversationSerializer(conversation)
+        
+        return Response(api_response(
+            ok=True,
+            data={
+                'conversation': serializer.data,
+                'message': 'Conversation reopened successfully'
+            }
+        ))
     
     except Conversation.DoesNotExist:
         return Response(

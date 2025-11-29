@@ -23,38 +23,30 @@ def api_response(ok=True, data=None, error=None):
     return {'ok': ok, 'data': data, 'error': error}
 
 
-def _generate_neural_load_time_series(base_load):
+def _generate_neural_load_time_series(workspace):
     """
-    Generate neural load time series with 24 data points at 5-minute intervals.
+    Get neural load time series from actual historical data.
     
     Args:
-        base_load: Current system load percentage (0-100)
+        workspace: Workspace model instance
         
     Returns:
         list: Array of timestamp-value pairs representing system load over time
         
     Requirements: 2.9, 8.3
     """
-    neural_load = []
-    now = timezone.now()
+    from .workspace_service import get_neural_load_history
     
-    # Generate 24 data points at 5-minute intervals
-    for i in range(24):
-        timestamp = now - timedelta(minutes=i * 5)
-        # Add some realistic variation around the base load
-        # Use a sine wave pattern for smooth variation
-        import math
-        variation = int(math.sin(i * 0.5) * 10)  # ±10 variation
-        value = base_load + variation
-        value = max(0, min(100, value))  # Clamp to 0-100
-        
-        # Insert at beginning to maintain chronological order
-        neural_load.insert(0, {
-            'timestamp': timestamp,
-            'value': value
-        })
+    history = get_neural_load_history(workspace, points=24)
     
-    return neural_load
+    # Format timestamps for JSON serialization
+    return [
+        {
+            'timestamp': point['timestamp'].isoformat(),
+            'value': point['value']
+        }
+        for point in history
+    ]
 
 
 @api_view(['GET', 'POST'])
@@ -255,7 +247,7 @@ def workspace_dashboard_view(request, workspace_id):
         
         # Generate neural load time series (24 data points, 5-minute intervals)
         # Requirements: 2.9, 8.3
-        neural_load = _generate_neural_load_time_series(stats['systemLoad'])
+        neural_load = _generate_neural_load_time_series(workspace)
         
         dashboard_data = {
             'stats': stats,
@@ -346,30 +338,59 @@ def workspace_neural_load_view(request, workspace_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Calculate base load using service
+        # Get real historical data
+        neural_load = _generate_neural_load_time_series(workspace)
+        
+        # Calculate current load
         stats = calculate_workspace_stats(workspace)
-        base_load = stats['systemLoad']
-        
-        # Generate time series (last 24 data points, 5-minute intervals)
-        neural_load = []
-        now = timezone.now()
-        
-        for i in range(24):
-            timestamp = now - timedelta(minutes=i * 5)
-            # Add some variation
-            value = base_load + ((i * 7) % 15 - 7)  # Varies ±7
-            value = max(0, min(100, value))
-            
-            neural_load.insert(0, {
-                'timestamp': timestamp,
-                'value': value
-            })
         
         return Response(api_response(
             ok=True,
             data={
                 'neuralLoad': neural_load,
-                'currentLoad': base_load
+                'currentLoad': stats['systemLoad']
+            }
+        ))
+    
+    except Workspace.DoesNotExist:
+        return Response(
+            api_response(ok=False, error='Workspace not found'),
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def record_load_snapshot_view(request, workspace_id):
+    """
+    Record a system load snapshot for the workspace.
+    Called by frontend every 5 minutes to track historical load data.
+    """
+    try:
+        workspace = Workspace.objects.get(id=workspace_id)
+        
+        # Check access
+        is_owner = workspace.owner == request.user
+        is_member = workspace.members.filter(user=request.user).exists()
+        
+        if not (is_owner or is_member):
+            return Response(
+                api_response(ok=False, error='Access denied'),
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Record the snapshot
+        from .workspace_service import record_load_snapshot
+        record_load_snapshot(workspace)
+        
+        # Return current load
+        stats = calculate_workspace_stats(workspace)
+        
+        return Response(api_response(
+            ok=True,
+            data={
+                'currentLoad': stats['systemLoad'],
+                'message': 'Load snapshot recorded'
             }
         ))
     
