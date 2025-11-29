@@ -76,7 +76,10 @@ urlpatterns = [
     path('settings', views_settings.settings_view, name='settings'),
     path('settings/profile', views_settings.update_profile_view, name='settings-update-profile'),
     path('settings/memory-retention', views_settings.update_memory_retention_view, name='settings-update-memory-retention'),
+    path('settings/cleanup-info', views_settings.cleanup_info_view, name='cleanup-info'),
+    path('settings/cleanup', views_settings.manual_cleanup_view, name='manual-cleanup'),
     path('export', views_settings.export_data_view, name='export-data'),
+    path('account', views_settings.delete_account_view, name='delete-account'),
     
     # ============================================
     # HEALTH & UTILITY

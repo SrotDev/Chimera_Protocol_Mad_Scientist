@@ -72,16 +72,31 @@ class UserLoginSerializer(serializers.Serializer):
 
 
 # Team Member Serializers
+class TeamMemberUserSerializer(serializers.Serializer):
+    """Serializer for user info in team member"""
+    id = serializers.CharField()
+    name = serializers.CharField()
+    email = serializers.EmailField()
+
+
 class TeamMemberSerializer(serializers.ModelSerializer):
     """Serializer for TeamMember model"""
     userId = serializers.CharField(source='user.id', read_only=True)
     workspaceId = serializers.CharField(source='workspace.id', read_only=True)
     joinedAt = serializers.DateTimeField(source='joined_at', read_only=True)
+    user = serializers.SerializerMethodField()
     
     class Meta:
         model = TeamMember
-        fields = ['id', 'userId', 'workspaceId', 'role', 'status', 'joinedAt']
+        fields = ['id', 'userId', 'workspaceId', 'role', 'status', 'joinedAt', 'user']
         read_only_fields = ['id', 'joinedAt']
+    
+    def get_user(self, obj):
+        return {
+            'id': str(obj.user.id),
+            'name': obj.user.name if hasattr(obj.user, 'name') else obj.user.username,
+            'email': obj.user.email,
+        }
 
 
 # Workspace Serializers
@@ -249,11 +264,42 @@ class MemorySerializer(serializers.ModelSerializer):
     workspaceId = serializers.CharField(source='workspace.id', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+    embedding = serializers.SerializerMethodField()
     
     class Meta:
         model = Memory
         fields = ['id', 'workspaceId', 'title', 'content', 'snippet', 'tags', 'embedding', 'metadata', 'version', 'createdAt', 'updatedAt']
         read_only_fields = ['id', 'workspaceId', 'snippet', 'version', 'createdAt', 'updatedAt']
+    
+    def get_embedding(self, obj):
+        """Generate a visual signature from the memory content using a hash-based approach"""
+        import hashlib
+        import math
+        
+        # Use content + title to generate unique signature
+        text = f"{obj.title}:{obj.content}"
+        
+        # Generate hash
+        hash_bytes = hashlib.sha256(text.encode()).digest()
+        
+        # Convert to 100 float values between -1 and 1 for visualization
+        signature = []
+        for i in range(100):
+            # Use different parts of the hash with some variation
+            byte_idx = i % len(hash_bytes)
+            prev_byte = hash_bytes[(i - 1) % len(hash_bytes)]
+            
+            # Combine bytes for more variation
+            combined = (hash_bytes[byte_idx] + prev_byte * (i % 7)) % 256
+            
+            # Add sine wave component based on position for smoother curves
+            wave = math.sin(i * 0.3 + hash_bytes[i % len(hash_bytes)] * 0.1)
+            
+            # Normalize to -1 to 1 range
+            value = ((combined / 255.0) * 2 - 1) * 0.5 + wave * 0.5
+            signature.append(round(value, 4))
+        
+        return signature
 
 
 class MemoryCreateSerializer(serializers.Serializer):

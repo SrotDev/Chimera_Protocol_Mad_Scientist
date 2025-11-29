@@ -12,7 +12,6 @@ from django.db import transaction
 import json
 
 from .models import User, Workspace, Conversation, ChatMessage, Memory, Integration, TeamMember
-from .serializers_v2 import UserSerializer
 
 
 def api_response(ok=True, data=None, error=None):
@@ -156,6 +155,7 @@ def export_data_view(request):
     Export all user data as JSON
     Requirements: 7.4 - Generate JSON containing all user workspaces, conversations, messages, memories, and settings
     """
+    import traceback
     user = request.user
     
     try:
@@ -182,9 +182,10 @@ def export_data_view(request):
         }
         
         # Get all workspaces where user is owner or member
-        owned_workspaces = Workspace.objects.filter(owner=user)
-        member_workspaces = Workspace.objects.filter(members__user=user).distinct()
-        all_workspaces = (owned_workspaces | member_workspaces).distinct()
+        from django.db.models import Q
+        all_workspaces = Workspace.objects.filter(
+            Q(owner=user) | Q(members__user=user)
+        ).distinct()
         
         for workspace in all_workspaces:
             workspace_data = {
@@ -266,6 +267,8 @@ def export_data_view(request):
         return response
         
     except Exception as e:
+        print(f"Export error: {str(e)}")
+        traceback.print_exc()
         return Response(
             api_response(
                 ok=False,
@@ -315,6 +318,51 @@ def delete_account_view(request):
             api_response(
                 ok=False,
                 error=f'Failed to delete account: {str(e)}'
+            ),
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def cleanup_info_view(request):
+    """
+    Get cleanup countdown information for the current user.
+    Returns time remaining until next scheduled data cleanup.
+    """
+    from .cleanup_service import get_user_cleanup_info
+    
+    user = request.user
+    cleanup_info = get_user_cleanup_info(user)
+    
+    return Response(api_response(
+        ok=True,
+        data=cleanup_info
+    ))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def manual_cleanup_view(request):
+    """
+    Manually trigger data cleanup for the current user.
+    Deletes all owned workspaces and their associated data.
+    """
+    from .cleanup_service import cleanup_user_data
+    
+    user = request.user
+    
+    try:
+        result = cleanup_user_data(user)
+        return Response(api_response(
+            ok=True,
+            data=result
+        ))
+    except Exception as e:
+        return Response(
+            api_response(
+                ok=False,
+                error=f'Failed to cleanup data: {str(e)}'
             ),
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

@@ -205,20 +205,14 @@ def update_member_role_view(request, workspace_id, user_id):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def remove_team_member_view(request, workspace_id, user_id):
-    """Remove team member from workspace"""
+    """Remove team member from workspace - only owner can remove"""
     try:
         workspace = Workspace.objects.get(id=workspace_id)
         
-        # Only owner or admin can remove members
-        is_owner = workspace.owner == request.user
-        is_admin = workspace.members.filter(
-            user=request.user, 
-            role='admin'
-        ).exists()
-        
-        if not (is_owner or is_admin):
+        # Only owner can remove members
+        if workspace.owner != request.user:
             return Response(
-                api_response(ok=False, error='Only admins can remove members'),
+                api_response(ok=False, error='Only workspace owner can remove members'),
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -241,6 +235,12 @@ def remove_team_member_view(request, workspace_id, user_id):
         
         # Remove member
         team_member.delete()
+        
+        # Also delete any invitations for this user in this workspace
+        WorkspaceInvitation.objects.filter(
+            workspace=workspace,
+            invitee=target_user
+        ).delete()
         
         return Response(api_response(
             ok=True,
@@ -358,11 +358,11 @@ def accept_invitation_view(request, invitation_id):
         invitation.responded_at = timezone.now()
         invitation.save()
         
-        # Add user as team member with admin role (full access)
+        # Add user as team member with researcher role (full access but not admin)
         TeamMember.objects.create(
             user=request.user,
             workspace=invitation.workspace,
-            role='admin',
+            role='researcher',
             status='online'
         )
         
@@ -390,10 +390,8 @@ def decline_invitation_view(request, invitation_id):
             status='pending'
         )
         
-        # Update invitation status
-        invitation.status = 'declined'
-        invitation.responded_at = timezone.now()
-        invitation.save()
+        # Delete the invitation from the database
+        invitation.delete()
         
         return Response(api_response(ok=True, data={
             'message': 'Invitation declined'
