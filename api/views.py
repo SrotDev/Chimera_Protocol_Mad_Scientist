@@ -14,7 +14,7 @@ import json
 import os
 import time
 
-from .models import User, Memory
+from .models import User, Memory, Workspace
 from .serializers_v2 import UserSerializer, UserRegistrationSerializer, UserLoginSerializer, MemorySerializer
 from .memory_service import memory_service
 from .llm_router import call_llm, get_supported_models
@@ -157,17 +157,40 @@ def update_profile_view(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mcp_remember(request):
-    """Store a memory (legacy MCP endpoint)"""
+    """Store a memory (MCP endpoint)"""
     text = request.data.get('text')
-    conversation_id = request.data.get('conversation_id')
-    if not text or not conversation_id:
-        return Response(api_response(ok=False, error='text and conversation_id required'), status=status.HTTP_400_BAD_REQUEST)
+    workspace_id = request.data.get('workspace_id')
+    
+    if not text:
+        return Response(api_response(ok=False, error='text required'), status=status.HTTP_400_BAD_REQUEST)
     
     try:
-        memory = Memory.objects.create(text=text, tags=request.data.get('tags', []), 
-                                      conversation_id=conversation_id, metadata=request.data.get('metadata', {}))
-        return Response(api_response(ok=True, data={'id': memory.id, 'status': 'saved', 
-                                                    'created_at': memory.created_at.isoformat()}), status=status.HTTP_201_CREATED)
+        # Get workspace - use first available if not specified
+        if workspace_id:
+            workspace = Workspace.objects.get(id=workspace_id)
+        else:
+            workspace = Workspace.objects.first()
+            if not workspace:
+                return Response(api_response(ok=False, error='No workspace available'), status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create memory with proper fields
+        title = request.data.get('title', text[:50] + '...' if len(text) > 50 else text)
+        memory = Memory.objects.create(
+            workspace=workspace,
+            title=title,
+            content=text,
+            tags=request.data.get('tags', []),
+            metadata=request.data.get('metadata', {})
+        )
+        return Response(api_response(ok=True, data={
+            'id': memory.id,
+            'title': memory.title,
+            'status': 'saved',
+            'workspace_id': workspace.id,
+            'created_at': memory.created_at.isoformat()
+        }), status=status.HTTP_201_CREATED)
+    except Workspace.DoesNotExist:
+        return Response(api_response(ok=False, error='Workspace not found'), status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response(api_response(ok=False, error=str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -195,14 +218,36 @@ def batch_remember(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mcp_search(request):
-    """Search memories (legacy MCP endpoint)"""
+    """Search memories (MCP endpoint)"""
     query = request.data.get('query')
     if not query:
         return Response(api_response(ok=False, error='query required'), status=status.HTTP_400_BAD_REQUEST)
     
     try:
-        results = memory_service.search(query, request.data.get('top_k', 5), request.data.get('conversation_id'))
-        return Response(api_response(ok=True, data=results))
+        workspace_id = request.data.get('workspace_id')
+        top_k = request.data.get('top_k', 5)
+        
+        # Search in memories using simple text matching
+        memories_qs = Memory.objects.all()
+        if workspace_id:
+            memories_qs = memories_qs.filter(workspace_id=workspace_id)
+        
+        # Simple search by content/title containing query
+        from django.db.models import Q
+        memories_qs = memories_qs.filter(
+            Q(content__icontains=query) | Q(title__icontains=query)
+        )[:top_k]
+        
+        results = [{
+            'id': m.id,
+            'title': m.title,
+            'snippet': m.snippet or m.content[:150],
+            'tags': m.tags,
+            'score': 1.0,  # Placeholder score
+            'created_at': m.created_at.isoformat()
+        } for m in memories_qs]
+        
+        return Response(api_response(ok=True, data={'results': results, 'total': len(results)}))
     except Exception as e:
         return Response(api_response(ok=False, error=str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -210,16 +255,34 @@ def mcp_search(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mcp_inject(request):
-    """Get memories for context injection (legacy MCP endpoint)"""
-    conversation_id = request.data.get('conversation_id')
-    if not conversation_id:
-        return Response(api_response(ok=False, error='conversation_id required'), status=status.HTTP_400_BAD_REQUEST)
+    """Get memories for context injection (MCP endpoint)"""
+    workspace_id = request.data.get('workspace_id')
     
     try:
-        memories = Memory.objects.filter(conversation_id=conversation_id).order_by('-created_at')[:request.data.get('max_memories', 10)]
-        memory_list = [{'id': m.id, 'text': m.text, 'tags': m.tags, 'created_at': m.created_at.isoformat()} for m in memories]
-        context = "\n".join([f"- {m.text}" for m in memories]) if memories else "No memories found."
-        return Response(api_response(ok=True, data={'injected_context': context, 'memory_count': len(memory_list), 'memories': memory_list}))
+        max_memories = request.data.get('max_memories', 10)
+        
+        # Get memories from workspace
+        memories_qs = Memory.objects.all()
+        if workspace_id:
+            memories_qs = memories_qs.filter(workspace_id=workspace_id)
+        
+        memories = memories_qs.order_by('-created_at')[:max_memories]
+        
+        memory_list = [{
+            'id': m.id,
+            'title': m.title,
+            'content': m.content,
+            'tags': m.tags,
+            'created_at': m.created_at.isoformat()
+        } for m in memories]
+        
+        context = "\n".join([f"- {m.title}: {m.content}" for m in memories]) if memories else "No memories found."
+        
+        return Response(api_response(ok=True, data={
+            'injected_context': context,
+            'memory_count': len(memory_list),
+            'memories': memory_list
+        }))
     except Exception as e:
         return Response(api_response(ok=False, error=str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
