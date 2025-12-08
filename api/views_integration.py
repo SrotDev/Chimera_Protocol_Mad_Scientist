@@ -290,6 +290,27 @@ def _test_provider_connection(provider, api_key):
                 logger.error(f"❌ DeepSeek API error: {response.status_code} - {error_detail}")
                 return {'success': False, 'error': f'API returned status {response.status_code}'}
         
+        elif provider == 'groq':
+            # Test Groq API using /models endpoint (OpenAI-compatible)
+            response = requests.get(
+                'https://api.groq.com/openai/v1/models',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                },
+                timeout=10
+            )
+            
+            logger.info(f"✅ Groq API response: {response.status_code}")
+            
+            if response.status_code == 200:
+                return {'success': True}
+            elif response.status_code == 401:
+                return {'success': False, 'error': 'Invalid API key'}
+            else:
+                error_detail = response.text[:200] if response.text else 'No details'
+                logger.error(f"❌ Groq API error: {response.status_code} - {error_detail}")
+                return {'success': False, 'error': f'API returned status {response.status_code}'}
+        
         else:
             return {'success': False, 'error': f'Unknown provider: {provider}'}
     
@@ -327,13 +348,13 @@ def available_models_view(request):
         status='connected'
     )
     
-    # All models available for each provider
+    # All models available for each provider (must match SUPPORTED_MODELS in llm_router.py)
     PROVIDER_MODELS = {
         'openai': ['gpt-4o', 'gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'],
         'anthropic': ['claude-3.5-sonnet', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'],
-        'google': ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'],
+        'google': ['gemini-2.0-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.5-pro'],
         'deepseek': ['deepseek-chat', 'deepseek-coder'],
-        'groq': ['llama-3-70b', 'llama-3-8b', 'mixtral-8x7b'],
+        'groq': ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama3-70b-8192', 'mixtral-8x7b-32768'],
     }
     
     # Build list of available models from connected integrations
